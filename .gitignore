@@ -1,0 +1,47 @@
+# 1. 데이터셋 및 원본 소스 오염 방지
+# 대용량 로우 데이터 및 다운로드 압축 파일의 Git 추적 배제
+data/
+*.zip
+*.tar.gz
+*.data
+*.csv
+
+# 2. Python 가상 환경 및 컴파일 아티팩트
+# 개발 환경 간 종속성 격리 및 컴파일러 캐시 제거
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.eggs
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 3. MLOps 및 실험 추적 (MLflow 관련)
+# 로컬에서 실행된 MLflow 런타임 데이터 및 아티팩트 저장소 제외
+mlruns/
+.mlflow/
+mlflow.db
+
+# 4. 프로덕션 로그 및 모니터링 추론 로그
+# 추론 파이프라인에서 적재되는 시계열 데이터 및 진단 로그 제외
+logs/
+*.log
+inference.log
+
+# 5. IDE 및 로컬 운영체제 종속 파일
+# 개발자 개인 설정 파일 격리
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# 6. Jupyter Notebook 체크포인트
+# 노트북 체크포인트 캐시 파일 커밋 방지
+.ipynb_checkpoints/
