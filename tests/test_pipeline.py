@@ -11,6 +11,7 @@ from src.preprocessing import load_n_clean_data, build_production_pipeline
 
 # 전역 실험 시드 고정
 SEED: int = 42
+# 패키지 경로 탐색 최적화
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
@@ -50,13 +51,11 @@ class TestCardioCarePipeline(unittest.TestCase):
         model = RandomForestClassifier(random_state=SEED)
         model.fit(X_train_proc, self.y_train)
 
-        # 실제 예측 확률 매트릭스를 직접 연산하여 단언문 수행
+        # 실제 예측 확률 매트릭스를 직접 연산
         actual_output_probs = model.predict_proba(X_test_proc)
 
-        # 모든 클래스별 확률값은 0 이상 1 이하에 존재해야 함
         self.assertTrue(
-            np.all(actual_accuracy_trend := actual_output_probs >= 0.0)
-            and np.all(actual_output_probs <= 1.0)
+            np.all(actual_output_probs >= 0.0) and np.all(actual_output_probs <= 1.0)
         )
 
         # 행별 확률의 수학적 합계는 부동소수점 오차 범위 내에서 정확히 1.0 스케일이어야 함

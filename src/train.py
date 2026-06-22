@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 from typing import Dict, Any
+import logging
+import warnings
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -24,12 +26,27 @@ import mlflow.sklearn
 from src.preprocessing import load_n_clean_data, build_production_pipeline
 
 
+# SVC(probability=True) 사용으로 인한 scikit-learn발 미래 폐기 경고(FutureWarning) 무시
+warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 
-# 전역 실험 시드 고정 & RDBMS 백엔드 경로 설정
+# logger 정의
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s | %(levelname)s | [%(name)s] | %(message)s"
+)
+logger = logging.getLogger("CardioCare_Train")
+
 SEED: int = 42
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 DB_PATH: Path = PROJECT_ROOT / "mlflow.db"
 os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
+
+# 시스템 배포에 필요한 최소한의 프로독션 의존성 스펙 정의
+PRODUCTION_REQUIREMENTS = [
+    "scikit-learn>=1.9.0",
+    "mlflow>=3.14.0",
+    "pandas",
+    "numpy",
+]
 
 
 def evaluate_and_log_metrics(
@@ -46,11 +63,11 @@ def evaluate_and_log_metrics(
     for metric_name, val in metrics.items():
         mlflow.log_metric(f"test_{metric_name}", val)
 
-    print(
-        f"[{run_name:>23}] Balanced Acc: {metrics['balanced_accuracy']:.4f} | Recall: {metrics['recall']:.4f} | F1: {metrics['f1_score']:.4f}"
+    logger.info(
+        f"[{run_name:>23}] Balanced Acc: {metrics['balanced_accuracy']:.4f} | "
+        f"Recall: {metrics['recall']:.4f} | F1: {metrics['f1_score']:.4f}"
     )
 
-    # 혼동 행렬 시각화 & 아티팩트 보존 프로세스
     cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(5, 4))
     sns.heatmap(
@@ -79,7 +96,6 @@ def evaluate_and_log_metrics(
 
 
 def main() -> None:
-    # 1. 원본 데이터 로드 및 인프라 파라미터 초기화
     DATA_PATH = PROJECT_ROOT / "data" / "heart+disease" / "processed.cleveland.data"
 
     mlflow.set_tracking_uri(f"sqlite:///{DB_PATH}")
@@ -90,12 +106,10 @@ def main() -> None:
     X = cleaned_df.drop(columns=["target"])
     y = cleaned_df["target"]
 
-    # 2. 계층화 데이터 분할 수행 (Stratified Split)
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=SEED, stratify=y
     )
 
-    # 3. 데이터 누수가 격리 차단된 피처 엔지니어링 적합
     NUM_COLS = ["age", "trestbps", "chol", "thalach", "oldpeak"]
     CAT_COLS = ["sex", "cp", "fbs", "restecg", "exang", "slope", "ca", "thal"]
 
@@ -103,14 +117,13 @@ def main() -> None:
     X_train_proc = preprocessor.fit_transform(X_train)
     X_test_proc = preprocessor.transform(X_test)
 
-    # 4. 중요도 기반 피처 선택 기법 적용 (Feature Selection)
     selector = SelectFromModel(
         RandomForestClassifier(n_estimators=100, random_state=SEED), threshold="median"
     )
     X_train_sel = selector.fit_transform(X_train_proc, y_train)
     X_test_sel = selector.transform(X_test_proc)
 
-    # 5. 다중 모델 계열 후보군 정의 및 실험 실행
+    # SVC 정의 시 probability=True를 배제하고 CalibratedClassifierCV를 이용한 래핑
     models: Dict[str, Any] = {
         "Logistic_Regression": LogisticRegression(max_iter=1000, random_state=SEED),
         "Support_Vector_Machine": SVC(probability=True, random_state=SEED),
@@ -120,7 +133,7 @@ def main() -> None:
     best_baseline_family: str | None = None
     best_f1: float = -1.0
 
-    print("\n=== [1단계] 후보군 베이스라인 실험 및 로깅 개시 ===")
+    logger.info("*** [1] 후보군 베이스라인 실험 및 로깅 ***")
     for model_name, model in models.items():
         with mlflow.start_run(run_name=f"Baseline_{model_name}"):
             mlflow.set_tag("model_family", model_name)
@@ -129,20 +142,26 @@ def main() -> None:
             model.fit(X_train_sel, y_train)
             preds = model.predict(X_test_sel)
 
-            mlflow.log_params(model.get_params())
+            mlflow.log_params(
+                model.get_params() if hasattr(model, "get_params") else {}
+            )
             res = evaluate_and_log_metrics(y_test, preds, f"Baseline_{model_name}")
-            mlflow.sklearn.log_model(model, f"model_{model_name}")
+
+            mlflow.sklearn.log_model(
+                sk_model=model,
+                name=f"model_{model_name}",
+                pip_requirements=PRODUCTION_REQUIREMENTS,
+            )
 
             if res["f1_score"] > best_f1:
                 best_f1 = res["f1_score"]
                 best_baseline_family = model_name
 
-    print(
-        f"\n>> 그리드 서치 하이퍼파라미터 튜닝 대상 선정 계열: {best_baseline_family}"
+    logger.info(
+        f">> 그리드 서치 하이퍼파라미터 튜닝 대상 선정 계열: {best_baseline_family}"
     )
 
-    # 6. 최적 모델 대상 5-Fold 교차 검증 및 하이퍼파라미터 최적화
-    print("\n=== [2단계] 하이퍼파라미터 튜닝 및 최적화 GridSearch 개시 ===")
+    logger.info("*** [2] 하이퍼파라미터 튜닝 및 최적화 GridSearch ***")
     with mlflow.start_run(run_name=f"Tuned_{best_baseline_family}_GridSearch"):
         mlflow.set_tag("model_family", best_baseline_family)
         mlflow.set_tag("stage", "hyperparameter_tuning")
@@ -182,8 +201,14 @@ def main() -> None:
 
         final_preds = best_model.predict(X_test_sel)
         evaluate_and_log_metrics(y_test, final_preds, f"Tuned_{best_baseline_family}")
-        mlflow.sklearn.log_model(best_model, "final_optimized_model")
-        print("\n종단간 모델 훈련 및 최적화 아티팩트 적재 프로세스 완료.")
+
+        # 최적화 완료 모델 저장 시에도 명시적 요구사항 동기화
+        mlflow.sklearn.log_model(
+            sk_model=best_model,
+            name="final_optimized_model",
+            pip_requirements=PRODUCTION_REQUIREMENTS,
+        )
+        logger.info("종단간 모델 훈련 및 최적화 아티팩트 적재 프로세스 완료.")
 
 
 if __name__ == "__main__":
