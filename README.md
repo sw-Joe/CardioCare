@@ -29,6 +29,7 @@
 ## 2. 개발 환경 구축 및 로컬 파이프라인 재현 절차
 
 본 프로젝트는 Python 3.10 환경에서 동작하며 무작위 시드는 `42`로 결정론적 고정되었습니다.
+모든 명령어는 프로젝트 루트 디렉토리(`cardio_care/`)에서 실행해야 파이썬 패키지 내부 경로 탐색이 정상 작동합니다.
 
 ### 2.1 가상환경 초기화 및 패키지 설치
 ```Bash
@@ -41,37 +42,37 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 2.2 단위 테스트 및 코드 안정성 검증 (§5.3)
+2.2 스타일 검증 및 자동화 단위 테스트 (§5.3)
 
-CI(지속적 통합) 환경과 동일하게 4대 필수 유닛 테스트(Shape 일치, 확률 범위, 임상 경계값 방어, 결정론적 작동)를 수행합니다.
-
+Ruff 정적 분석 도구를 통한 PEP 8 스타일 검증 및 4대 필수 단위 테스트를 수행합니다.
 ```Bash
+# Ruff 린터 및 포매터 검증
+ruff check .
+ruff format --check .
+
+# 유닛 테스트 모듈 실행 (반드시 -m 플래그 사용)
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-### 2.3 머신러닝 모델 학습 및 실험 추적 실행 (§5.2)
+2.3 머신러닝 모델 학습 및 실험 추적 실행 (§5.2)
 
-3개 계열(Logistic Regression, SVC, Random Forest) 베이스라인 학습 후 최적 후보군을 선별하여 5-Fold 교차 검증 및 하이퍼파라미터 튜닝을 연속 수행합니다. 트랙킹 안정성을 위해 SQLite RDBMS 백엔드가 자동 가동됩니다.
+3개 계열 베이스라인 학습 후 최적 후보군을 선별하여 5-Fold 교차 검증을 가동합니다. 파이썬 모듈 시스템 패키징 구조로 실행합니다.
 ```Bash
-python src/train.py
+# 모델 훈련 파이프라인 가동 (반드시 -m 플래그 사용)
+python -m src.train
 ```
-
--  실험 대시보드 확인:
+- MLflow 실험 대시보드 확인:
 ```Bash
-
 mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
 ```
-가동 후 브라우저에서 http://127.0.0.1:5000에 접속하여 실험 지표 및 아티팩트(Confusion Matrix)를 대조할 수 있습니다.
 
-### 2.4 운영 모니터링 및 데이터 드리프트 탐지 (§5.4)
+2.4 운영 모니터링 및 데이터 드리프트 탐지 (§5.4)
 
-학습 데이터 분포 대비 운영 추론 유입 데이터 간의 이표본 KS-Test 검정을 시뮬레이션하여 드리프트 경고 트리거와 성능 저하 시계열 플롯을 내보냅니다.
-
+실제 데이터셋 기반의 일자별 점진적 센서 열화 수치를 직접 통계 연산하여 드리프트 경고 트리거와 성능 저하 시계열 리포트를 추출합니다.
 ```Bash
-python src/monitor.py
+# 모니터링 파이프라인 가동 (반드시 -m 플래그 사용)
+python -m src.monitor
 ```
-- 결과 시각화 파일은 notebooks/drift_monitoring_report.png 경로에 생성됩니다.
-
 
 ## 3. Docker 컨테이너를 통한 배포 및 재현 절차 (§5.3)
 
