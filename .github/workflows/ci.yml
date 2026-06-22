@@ -9,8 +9,7 @@ on:
 
 jobs:
   test-and-verify:
-    runs-size: ubuntu-latest
-    runs-on: ubuntu-24.04 # 로컬 개발 환경인 Ubuntu LTS 버전 컨텍스트 부합
+    runs-on: ubuntu-24.04 # 로컬 개발 환경: Ubuntu LTS 버전 컨텍스트 부합
 
     steps:
     # 1. 소스 코드 체크아웃
@@ -18,10 +17,10 @@ jobs:
       uses: actions/checkout@v4
 
     # 2. 런타임 가상환경 셋업
-    - name: Set up Python 3.10
+    - name: Set up Python 3.13
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.13'
         cache: 'pip' # pip 의존성 캐싱으로 CI 빌드 속도 단축
 
     # 3. 고정 버전 종속성 패키지 설치
@@ -30,7 +29,7 @@ jobs:
         python -m pip install --upgrade pip
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    # 4. 자동화 유닛 테스트 타겟 구동 (§5.3 강제 요건)
+    # 4. 자동화 유닛 테스트 타겟 구동
     - name: Execute Automated Unit Tests
       run: |
         python -m unittest discover -s tests -p "test_*.py"
