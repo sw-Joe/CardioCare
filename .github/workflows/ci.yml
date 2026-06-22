@@ -23,13 +23,21 @@ jobs:
         python-version: '3.13'
         cache: 'pip' # pip 의존성 캐싱으로 CI 빌드 속도 단축
 
-    # 3. 고정 버전 종속성 패키지 설치
+    # 3. 고정 버전 종속성 패키지 및 린터 설치
     - name: Install Project Dependencies
       run: |
         python -m pip install --upgrade pip
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install ruff # 초고속 Rust 기반 린터/포매터 추가 설치
 
-    # 4. 자동화 유닛 테스트 타겟 구동
+    # 4. Ruff를 이용한 소스 코드 스타일 정적 분석 및 포맷팅 검증 (Fast-Fail 적용)
+    # PEP 8 스타일 위반 및 미사용 임포트, 포맷팅 미준수 발견 시 이후 테스트를 실행하지 않고 즉시 종료
+    - name: Lint and Format Check with Ruff
+      run: |
+        ruff check .
+        ruff format --check .
+
+    # 5. 자동화 유닛 테스트 타겟 구동
     - name: Execute Automated Unit Tests
       run: |
         python -m unittest discover -s tests -p "test_*.py"

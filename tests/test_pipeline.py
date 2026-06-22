@@ -1,80 +1,101 @@
+from pathlib import Path
+import sys
 import unittest
+
+# 패키지 경로 탐색 최적화
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
 import numpy as np
 import pandas as pd
-from sklearn.utils.validation import check_is_fitted
-from src.preprocessing import build_production_pipeline
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+
+from src.preprocessing import load_n_clean_data, build_production_pipeline
+
+
+
+# 전역 실험 시드 고정
+SEED: int = 42
 
 
 class TestCardioCarePipeline(unittest.TestCase):
-    
     def setUp(self) -> None:
-        """독립적인 테스트 스케줄 단위의 가상 환자 데이터(Mock Data) 셋업"""
+        """데이터셋 일부를 로드하여 셋업"""
+        DATA_PATH = PROJECT_ROOT / "data" / "heart+disease" / "processed.cleveland.data"
+        cleaned_df = load_n_clean_data(DATA_PATH)
+        
+        X = cleaned_df.drop(columns=["target"])
+        y = cleaned_df["target"]
+        
+        # 실제 데이터셋의 분할본을 테스트 마스터로 활용
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
+            X, y, test_size=0.2, random_state=SEED, stratify=y
+        )
+        
         self.NUM_COLS = ["age", "trestbps", "chol", "thalach", "oldpeak"]
         self.CAT_COLS = ["sex", "cp", "fbs", "restecg", "exang", "slope", "ca", "thal"]
         
-        self.valid_mock_data = pd.DataFrame({
-            "age": [55, 40, 65], "sex": [1, 0, 1], "cp": [2, 0, 3],
-            "trestbps": [130, 120, 140], "chol": [250, 200, 300], "fbs": [0, 1, 0],
-            "restecg": [1, 0, 1], "thalach": [150, 170, 120], "exang": [0, 1, 0],
-            "oldpeak": [1.5, 0.0, 2.5], "slope": [1, 2, 0], "ca": [0, 2, 1], "thal": [2, 3, 1]
-        })
-        
         self.pipeline = build_production_pipeline(self.NUM_COLS, self.CAT_COLS)
-        self.pipeline.fit(self.valid_mock_data)
+        self.pipeline.fit(self.X_train)
+
 
     def test_01_prediction_shape_match(self) -> None:
-        """[요구사항 1] 데이터프레임 변환 후 행렬 인덱스 및 형상(Shape) 일치 무결성 검증"""
-        transformed_X = self.pipeline.transform(self.valid_mock_data)
+        """01. 실제 데이터를 변환했을 때 행렬 인덱스 및 형상(Shape) 무결성 검증"""
+        transformed_X = self.pipeline.transform(self.X_test)
         
-        # 유입 건수와 변환 행 수의 완전 일치 매칭 판정
-        self.assertEqual(transformed_X.shape[0], self.valid_mock_data.shape[0])
-        # 인코딩 차원 확장에 따른 유효성 스크리닝
+        # 유입된 실제 테스트셋 행 수와 출력 행 수의 일치 판정
+        self.assertEqual(transformed_X.shape[0], self.X_test.shape[0])
         self.assertGreater(transformed_X.shape[1], len(self.NUM_COLS))
 
+
     def test_02_probability_range_and_sum(self) -> None:
-        """[요구사항 2] 예측 분류 확률의 유효 수학적 범위 [0, 1] 및 행별 합산 스케일 1.0 여부 검증"""
-        # 다중 클래스 소프트맥스 출력 형태의 모킹 행렬 선언
-        mock_probs = np.array([
-            [0.85, 0.15],
-            [0.02, 0.98],
-            [0.45, 0.55]
-        ])
+        """02. 실제 모델이 출력한 예측 확률 배열의 수학적 범위 [0, 1] 및 합산 1.0 검증"""
+        X_train_proc = self.pipeline.transform(self.X_train)
+        X_test_proc = self.pipeline.transform(self.X_test)
         
-        # 하한 및 상한 임계 곡선 범위 유효성 판단
-        self.assertTrue(np.all(mock_probs >= 0.0) and np.all(mock_probs <= 1.0))
+        model = RandomForestClassifier(random_state=SEED)
+        model.fit(X_train_proc, self.y_train)
         
-        # 부동 소수점 누적 오차를 반영한 행 합산 1.0 검정
-        row_sums = mock_probs.sum(axis=1)
+        # [REAL COMPUTE] 하드코딩을 제거하고 실제 예측 확률 매트릭스를 직접 연산하여 단언문 수행
+        actual_output_probs = model.predict_proba(X_test_proc)
+        
+        # 모든 클래스별 확률값은 0 이상 1 이하에 존재해야 함
+        self.assertTrue(np.all(actual_accuracy_trend := actual_output_probs >= 0.0) and np.all(actual_output_probs <= 1.0))
+        
+        # 행별 확률의 수학적 합계는 부동소수점 오차 범위 내에서 정확히 1.0 스케일이어야 함
+        row_sums = actual_output_probs.sum(axis=1)
         np.testing.assert_allclose(row_sums, 1.0, rtol=1e-5)
 
+
     def test_03_clinical_feature_input_range_validation(self) -> None:
-        """[요구사항 3] 생물학적으로 불가능한 데이터유입 시 임상 도메인 방어선 차단 동작 검증"""
-        invalid_data = self.valid_mock_data.copy()
-        invalid_data.loc[0, "age"] = -10  # 비정상 데이터 주입
+        """03. 실제 데이터를 의도적으로 오염시켰을 때 임상 방어선의 예외 차단 동작 검증"""
+        # 실제 데이터 사본 생성
+        invalid_clinical_data = self.X_test.copy()
+        # [INTENTIONAL MUTATION] 방어선 작동 테스트를 위해 특정 실제 나이 수치를 음수(-10)로 강제 변이
+        invalid_clinical_data.loc[invalid_clinical_data.index[0], "age"] = -10  
         
-        # 시스템 전단 검증기가 명세 범위를 벗어난 오류에 대해 정확히 ValueError를 발생시키는지 판단
         with self.assertRaises(ValueError):
-            validate_clinical_bounds(invalid_data)
+            validate_clinical_bounds(invalid_clinical_data)
+
 
     def test_04_deterministic_operation_on_fixed_seed(self) -> None:
-        """[요구사항 4] 동일 시드 하에서 모델 초기화 및 적합 연산의 결정론적(Deterministic) 재현성 검증"""
-        from sklearn.ensemble import RandomForestClassifier
-        transformed_X = self.pipeline.transform(self.valid_mock_data)
-        y_mock = np.array([0, 1, 0])
+        """04. 실제 데이터셋 환경에서 동일 시드 하의 알고리즘 결정론적(Deterministic) 재현성 검증"""
+        X_test_proc = self.pipeline.transform(self.X_test)
         
-        # 고정된 무작위 난수 기반의 난수열 복제 가동
-        model_a = RandomForestClassifier(n_estimators=10, random_state=42)
-        model_b = RandomForestClassifier(n_estimators=10, random_state=42)
+        model_a = RandomForestClassifier(n_estimators=10, random_state=SEED)
+        model_b = RandomForestClassifier(n_estimators=10, random_state=SEED)
         
-        model_a.fit(transformed_X, y_mock)
-        model_b.fit(transformed_X, y_mock)
+        model_a.fit(X_test_proc, self.y_test)
+        model_b.fit(X_test_proc, self.y_test)
         
-        # 두 독립 실행 모델의 클래스별 리턴 확률 값이 완벽히 일치하는지 단언
-        np.testing.assert_array_equal(model_a.predict_proba(transformed_X), model_b.predict_proba(transformed_X))
+        np.testing.assert_array_equal(model_a.predict_proba(X_test_proc), model_b.predict_proba(X_test_proc))
 
 
 def validate_clinical_bounds(df: pd.DataFrame) -> bool:
-    """환자의 인적/생물학적 도메인 허용 스키마 임계치 스크리닝 가드"""
+    """age값에 대한 유효성 검증"""
     if (df["age"] < 0).any() or (df["age"] > 120).any():
         raise ValueError("임상 무결성 에러: 연령 데이터 수치가 의학적 범주를 이탈했습니다.")
     return True

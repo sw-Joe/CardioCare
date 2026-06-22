@@ -1,13 +1,17 @@
+from typing import List
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from typing import List
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
-# Cleveland 데이터셋 마스터 스키마 정의
+
+
+# 데이터 상세 기록에 명시된 컬럼명(스키마)
 HEART_DISEASE_SCHEMA: List[str] = [
     "age", "sex", "cp", "trestbps", "chol", "fbs", "restecg", 
     "thalach", "exang", "oldpeak", "slope", "ca", "thal", "target"
@@ -16,9 +20,9 @@ HEART_DISEASE_SCHEMA: List[str] = [
 
 class OutlierClipper(BaseEstimator, TransformerMixin):
     """
-    훈련 데이터셋(Train Set)에서 계산된 IQR 경계값을 고정하여 저장하고,
-    새로운 데이터(Test/Inference) 유입 시 동일한 기준선으로 이상치를 클리핑하여
-    데이터 누수(Data Leakage)를 방지하는 프로덕션 레벨 커스텀 변환기.
+    데이터 누수(Data Leakage)를 방지하는 프로덕션 레벨 커스텀 변환기
+    - 훈련 데이터셋(Train Set)에서 계산된 IQR 경계값을 고정 저장
+    - 새로운 데이터(Test/Inference) 유입 시 동일한 기준선으로 이상치를 Clipping
     """
     def __init__(self, factor: float = 1.5) -> None:
         self.factor = factor
@@ -26,7 +30,7 @@ class OutlierClipper(BaseEstimator, TransformerMixin):
         self.upper_bounds_: List[float] = []
 
     def fit(self, X: np.ndarray, y: getattr = None) -> "OutlierClipper":
-        """훈련 데이터의 특성별 사분위수 및 IQR 상하한 임계치를 학습"""
+        """훈련 데이터의 특성별 사분위수, IQR 상하한 임계치 학습"""
         X_df = pd.DataFrame(X)
         self.lower_bounds_ = []
         self.upper_bounds_ = []
@@ -49,8 +53,8 @@ class OutlierClipper(BaseEstimator, TransformerMixin):
 
 def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    파이프라인 외부에서 데이터 스키마 자체의 결함을 정제하는 방어 함수.
-    타깃 변수 이진화, 중복 행 제거, 값 전체가 결측치인 빈 컬럼 제거를 수행함.
+    파이프라인 외부에서 데이터 스키마 자체의 결함 정제 함수
+    중복 행 제거, 값 전체가 결측치인 빈 컬럼 제거, 타깃 변수 이진화를 수행.
     """
     cleaned_df = df.copy()
     
@@ -71,25 +75,42 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     return cleaned_df
 
 
+def load_n_clean_data(data_path: Path) -> pd.DataFrame:
+    """
+    원본 CSV 소스로부터 데이터를 안전하게 수신하여 스키마를 강제 주입,
+    결측치 심볼(?) 파싱 및 1차 정제가 완료된 완결형 데이터프레임을 반환.
+    """
+    if not data_path.exists():
+        raise FileNotFoundError(f"정밀 진단 에러: 마스터 데이터 소스가 지정된 경로에 없습니다 -> {data_path}")
+        
+    raw_df = pd.read_csv(
+        data_path, 
+        header=None, 
+        names=HEART_DISEASE_SCHEMA, 
+        na_values="?"
+    )
+    return clean_raw_data(raw_df)
+
+
 def build_production_pipeline(numeric_features: List[str], categorical_features: List[str]) -> ColumnTransformer:
     """
     새로운 데이터 및 서빙 환경에 무수정 재적용 가능한
     sk-learn Pipeline 기반 컬럼 통합 변환기 빌더.
     """
-    # 수치형 변수: 이상치에 강건한 중앙값 대치 -> 변동성 제어 클리핑 -> 표준 스케일링
+    # 수치형 변수: 중앙값 대치 -> 변동성 제어 클리핑 -> 표준 스케일링
     numeric_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
         ("clipper", OutlierClipper(factor=1.5)),
         ("scaler", StandardScaler())
     ])
 
-    # 범주형 변수: 도메인 스키마 보존용 최빈값 대치 -> 미지 토큰 에러 우회형 원핫 인코딩
+    # 범주형 변수: 최빈값 대치 -> 알 수 없는 토큰 에러 우회형 원핫 인코딩
     categorical_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="most_frequent")),
         ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
     ])
 
-    # 명시되지 않은 미지의 노이즈 컬럼 유입 시 자동 탈락 제거 설정 (remainder='drop')
+    # 명시되지 않은 알 수 없는 노이즈 컬럼 유입 시 제거
     preprocessor = ColumnTransformer(
         transformers=[
             ("num", numeric_transformer, numeric_features),

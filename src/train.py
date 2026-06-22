@@ -3,37 +3,39 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 
-import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
-import seaborn as sns
-
-from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
-from sklearn.feature_selection import SelectFromModel
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-from sklearn.metrics import balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-
-import mlflow
-import mlflow.sklearn
-
 # 패키지 경로 탐색 최적화
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from src.preprocessing import clean_raw_data, build_production_pipeline, HEART_DISEASE_SCHEMA
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
+from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
+from sklearn.feature_selection import SelectFromModel
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.metrics import (
+    balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+)
+import mlflow
+import mlflow.sklearn
 
-# 전역 실험 무작위 시드 및 RDBMS 백엔드 경로 설정
+from src.preprocessing import load_n_clean_data, build_production_pipeline
+
+
+
+# 전역 실험 시드 고정 & RDBMS 백엔드 경로 설정
 SEED: int = 42
 DB_PATH: Path = PROJECT_ROOT / "mlflow.db"
 os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
 
 
 def evaluate_and_log_metrics(y_true: pd.Series, y_pred: np.ndarray, run_name: str) -> Dict[str, float]:
-    """임상적 오진(False Negative) 제어를 고려한 4대 평가지표 산출 및 오차행렬 로깅"""
+    """평가지표 산출 및 혼동행렬 로깅 - False Negative(임상적 오진) 제어"""
     metrics = {
         "balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
         "precision": precision_score(y_true, y_pred, zero_division=0),
@@ -46,7 +48,7 @@ def evaluate_and_log_metrics(y_true: pd.Series, y_pred: np.ndarray, run_name: st
         
     print(f"[{run_name:>23}] Balanced Acc: {metrics['balanced_accuracy']:.4f} | Recall: {metrics['recall']:.4f} | F1: {metrics['f1_score']:.4f}")
     
-    # 혼동 행렬 시각화 아티팩트 보존 프로세스
+    # 혼동 행렬 시각화 & 아티팩트 보존 프로세스
     cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(5, 4))
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False,
@@ -74,8 +76,7 @@ def main() -> None:
     mlflow.set_tracking_uri(f"sqlite:///{DB_PATH}")
     mlflow.set_experiment("CardioCare_Heart_Disease_Prediction")
     
-    raw_df = pd.read_csv(DATA_PATH, header=None, names=HEART_DISEASE_SCHEMA, na_values="?")
-    cleaned_df = clean_raw_data(raw_df)
+    cleaned_df = load_n_clean_data(DATA_PATH)
     
     X = cleaned_df.drop(columns=["target"])
     y = cleaned_df["target"]
@@ -105,7 +106,7 @@ def main() -> None:
         "Random_Forest": RandomForestClassifier(random_state=SEED)
     }
     
-    best_baseline_family: str = None
+    best_baseline_family: str|None = None
     best_f1: float = -1.0
     
     print("\n=== [1단계] 후보군 베이스라인 실험 및 로깅 개시 ===")
